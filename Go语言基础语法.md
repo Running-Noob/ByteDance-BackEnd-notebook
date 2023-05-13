@@ -678,3 +678,196 @@ func main() {
   ```
 
 ### 03 实战
+
+#### 3.1 猜谜游戏 - 生成随机数
+
+1. 首先生成随机数，为了保证生成的随机数每次都不一样，需要使用随机种子：
+
+   ```go
+   func main() {
+   	maxNum := 100
+   	rand.Seed(time.Now().UnixNano())
+   	secretNumber := rand.Intn(maxNum)
+   }
+   ```
+
+2. 然后读取用户输入，这里使用的是 `bufio` 库来读取，并进行错误处理：
+
+   ```go
+   func main() {
+   	reader := bufio.NewReader(os.Stdin)
+   	input, err := reader.ReadString('\n')
+       if err != nil {
+   		fmt.Println("An error occured while reading input. Please try again", err)
+   		return
+   	}
+   	input = strings.Trim(input, "\r\n")
+   
+   	guess, err := strconv.Atoi(input)
+   	if err != nil {
+   		fmt.Println("Invalid input. Please enter an integer value")
+   		return
+   	}
+   }
+   ```
+
+3. 接着对用户的输入进行判断，根据用户的猜测返回相应的回答：
+
+   ```go
+   func main() {
+       if guess > secretNumber {
+   		fmt.Println("Your guess is bigger than the secret number. Please try again")
+   	} else if guess < secretNumber {
+   		fmt.Println("Your guess is smaller than the secret number. Please try again")
+   	} else {
+   		fmt.Println("Correct, you Legend!")
+   	}
+   }
+   ```
+
+4. 最后在外面嵌套一层 `for` 循环，利用 `continue` 和 `break` 来控制流程的进行：
+
+   ```go
+   func main() {
+       for {
+       }
+   }
+   ```
+
+- 在这个例子中，涉及的知识点包括变量、循环、函数控制流、错误处理。
+
+#### 3.2 在线词典
+
+1. 利用彩云小译网站的词典库，来进行英语单词释义，首先在网站上得到其请求：
+
+   <img src="img/Go语言基础语法/彩云小译网络.png"  />
+
+2. 再通过 [Convert curl to Go (curlconverter.com)](https://curlconverter.com/go/) 来将请求转换为 Go 语言类型的程序：
+
+   ```go
+   package main
+   
+   import (
+   	"fmt"
+   	"io"
+   	"log"
+   	"net/http"
+   	"strings"
+   )
+   
+   func main() {
+   	client := &http.Client{}
+   	var data = strings.NewReader(`{"trans_type":"en2zh","source":"awesome"}`)
+   	//创建请求
+   	req, err := http.NewRequest("POST", "https://api.interpreter.caiyunai.com/v1/dict", data)
+   	if err != nil {
+   		log.Fatal(err)
+   	}
+   	//设置请求头
+   	req.Header.Set("authority", "api.interpreter.caiyunai.com")
+   	req.Header.Set("accept", "application/json, text/plain, */*")
+   	req.Header.Set("accept-language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6")
+   	req.Header.Set("app-name", "xy")
+   	req.Header.Set("content-type", "application/json;charset=UTF-8")
+   	req.Header.Set("device-id", "5b0ce53c39e131ad4014c3044e87886b")
+   	req.Header.Set("origin", "https://fanyi.caiyunapp.com")
+   	req.Header.Set("os-type", "web")
+   	req.Header.Set("os-version", "")
+   	req.Header.Set("referer", "https://fanyi.caiyunapp.com/")
+   	req.Header.Set("sec-ch-ua", `"Microsoft Edge";v="113", "Chromium";v="113", "Not-A.Brand";v="24"`)
+   	req.Header.Set("sec-ch-ua-mobile", "?0")
+   	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
+   	req.Header.Set("sec-fetch-dest", "empty")
+   	req.Header.Set("sec-fetch-mode", "cors")
+   	req.Header.Set("sec-fetch-site", "cross-site")
+   	req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.35")
+   	req.Header.Set("x-authorization", "token:qgemv4jr1y38jyq6vhvi")
+   	//发起请求
+   	resp, err := client.Do(req)
+   	if err != nil {
+   		log.Fatal(err)
+   	}
+   	defer resp.Body.Close()
+   	//读取响应
+   	bodyText, err := io.ReadAll(resp.Body)
+   	if err != nil {
+   		log.Fatal(err)
+   	}
+   	fmt.Printf("%s\n", bodyText)
+   }
+   ```
+
+   此时返回的结果是 `JSON` 类型的字符串。
+
+3. 为了使得用户可以查找任意单词，需要将固定的 `JSON` 字符串输入转变为 `JSON` 序列化。
+
+   ```go
+   type DictRequest struct {
+   	TransType string `json:"trans_type"`
+   	Source    string `json:"source"`
+   	UserID    string `json:"user_id"`
+   }
+   
+   func main() {
+   	client := &http.Client{}
+   	//将固定的JSON字符串输入转变为JSON序列化
+   	// var data = strings.NewReader(`{"trans_type":"en2zh","source":"awesome"}`)
+   	request := DictRequest{TransType: "en2zh", Source: "awesome"}
+   	buf, err := json.Marshal(request)
+   	if err != nil {
+   		log.Fatal(err)
+   	}
+   	var data = bytes.NewReader(buf)
+   }
+   ```
+
+4. 由于返回的结果是 `JSON` 类型的字符串，难以阅读，所以需要对返回的结果进行处理。通过 [JSON转Golang Struct - 在线工具 - OKTools](https://oktools.net/json2go) 来将返回的 `JSON` 字符串转换为对应的 `struct`，并通过 `json.Unmarshal` 方法来对返回的结果进行处理，并保存到结构体变量中：
+
+   ```go
+   type DictResponse struct {
+   	Rc   int `json:"rc"`
+   	Wiki struct {
+   	} `json:"wiki"`
+   	Dictionary struct {
+   		Prons struct {
+   			EnUs string `json:"en-us"`
+   			En   string `json:"en"`
+   		} `json:"prons"`
+   		Explanations []string      `json:"explanations"`
+   		Synonym      []interface{} `json:"synonym"`
+   		Antonym      []interface{} `json:"antonym"`
+   		WqxExample   []interface{} `json:"wqx_example"`
+   		Entry        string        `json:"entry"`
+   		Type         string        `json:"type"`
+   		Related      []interface{} `json:"related"`
+   		Source       string        `json:"source"`
+   	} `json:"dictionary"`
+   }
+   
+   func main() {
+       // fmt.Printf("%s\n", bodyText)
+   	//将响应结果转化并保存在结构体变量dictResponse中
+   	var dictResponse DictResponse
+   	err = json.Unmarshal(bodyText, &dictResponse)
+   	if err != nil {
+   		log.Fatal(err)
+   	}
+   	fmt.Printf("%#v\n", dictResponse)
+   }
+   ```
+
+5. 但是现在结构体变量中的内容还是太多，我们需要进行处理来只输出我们想要的结果。
+
+   ```go
+   func main() {
+       //对输出进行裁剪选择
+   	fmt.Println("awesome", "UK:", dictResponse.Dictionary.Prons.En, "US:", dictResponse.Dictionary.Prons.EnUs)
+   	for _, item := range dictResponse.Dictionary.Explanations {
+   		fmt.Println(item)
+   	}
+   }
+   ```
+
+6. 最后将上面的代码封装为一个方法，传入参数为想要查询的单词即可。
+
+#### 3.3 SOCKS5 代理
