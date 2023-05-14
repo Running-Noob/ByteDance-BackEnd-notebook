@@ -870,4 +870,207 @@ func main() {
 
 6. 最后将上面的代码封装为一个方法，传入参数为想要查询的单词即可。
 
+- 在线词典需要注意的点有：
+  1. 将固定的 `JSON` 字符串输入转变为 `JSON` 序列化；
+  2. 将返回的 `JSON` 字符串转换为对应的 `struct`；
+  3. 从转化后的 `struct` 中得到我们真正想要的结果。
+
 #### 3.3 SOCKS5 代理
+
+- SOCKS5代理协议：SOCKS5协议是一款广泛使用的代理协议，它在使用 TCP/IP 协议通讯的前端机器和服务器机器之间扮演一个中介角色，使得内部网中的前端机器变得能够访问 Internet 网中的服务器，或者使通讯更加安全。
+
+  SOCKS5 服务器通过将前端发来的请求转发给真正的目标服务器， 模拟了一个前端的行为。在这里，前端和SOCKS5之间也是通过TCP/IP协议进行通讯，前端将原本要发送给真正服务器的请求发送给 SOCKS5 服务器，然后 SOCKS5 服务器将请求转发给真正的服务器。
+
+  ![](img/Go语言基础语法/SOCKS5.png)
+
+##### 工作原理
+
+- SOCKS5 通信的交互流程如下：
+
+  <img src="img/Go语言基础语法/SOCKS5原理.png" style="zoom:67%;" />
+
+  可分为四个阶段：
+
+  1. **协商（握手）阶段**：客户端向代理服务器发送代理请求，其中包含了代理的版本和认证方式；
+  2. **认证阶段**：服务端收到客户端的代理请求后，选择双方都支持的加密方式回复给客户端，此时客户端收到服务端的响应请求后，双方握手完成，开始进行协议交互；
+  3. **请求阶段**：客户端向代理服务器发送请求，由代理服务器将请求转发给真正想要请求的服务器；
+  4. **relay阶段**：客户端向代理服务器发送数据，由代理服务器将数据转发给服务器，并将服务器返回的响应结果发送给客户端。
+
+- 接下来就实现以上几个阶段。
+
+##### 代码实现
+
+1. 让服务器监听 `127.0.0.1:1080` 网址端口，如果收到客户端请求就进行处理：
+
+   ```go
+   func main() {
+   	server, err := net.Listen("tcp", "127.0.0.1:1080")
+   	if err != nil {
+   		panic(err)
+   	}
+   	for {
+   		client, err := server.Accept()
+   		if err != nil {
+   			log.Printf("Accept failed %v", err)
+   			continue
+   		}
+   		go process(client)
+   	}
+   }
+   ```
+
+2. 客户端和代理服务器之间的**协商认证阶段**，客户端向代理服务器发送类似注释中的数据，代理服务器对客户端发送的数据进行错误处理，如果没有错误，就返回认证信息：
+
+   ```go
+   func auth(reader *bufio.Reader, conn net.Conn) (err error) {
+   	// +----+----------+----------+
+   	// |VER | NMETHODS | METHODS  |
+   	// +----+----------+----------+
+   	// | 1  |    1     | 1 to 255 |
+   	// +----+----------+----------+
+   	// VER: 协议版本，socks5为0x05
+   	// NMETHODS: 支持认证的方法数量
+   	// METHODS: 对应NMETHODS，NMETHODS的值为多少，METHODS就有多少个字节。RFC预定义了一些值的含义，内容如下:
+   	// X’00’ NO AUTHENTICATION REQUIRED
+   	// X’02’ USERNAME/PASSWORD
+   
+   	ver, err := reader.ReadByte()
+   	if err != nil {
+   		return fmt.Errorf("read ver failed:%w", err)
+   	}
+   	if ver != socks5Ver {
+   		return fmt.Errorf("not supported ver:%v", ver)
+   	}
+   	methodSize, err := reader.ReadByte()
+   	if err != nil {
+   		return fmt.Errorf("read methodSize failed:%w", err)
+   	}
+   	method := make([]byte, methodSize)
+   	_, err = io.ReadFull(reader, method)
+   	if err != nil {
+   		return fmt.Errorf("read method failed:%w", err)
+   	}
+   	log.Println("ver", ver, "method", method)
+   	// +----+--------+
+   	// |VER | METHOD |
+   	// +----+--------+
+   	// | 1  |   1    |
+   	// +----+--------+
+   	_, err = conn.Write([]byte{socks5Ver, 0x00})
+   	if err != nil {
+   		return fmt.Errorf("write failed:%w", err)
+   	}
+   	return nil
+   }
+   ```
+
+3. **请求阶段**。在客户端和代理服务器之间建立了连接后，客户端就向代理服务器发送请求，由代理服务器将请求转发给真正想要请求的服务器，再由服务器返回响应：
+
+   ```go
+   func connect(reader *bufio.Reader, conn net.Conn) (err error) {
+   	// +----+-----+-------+------+----------+----------+
+   	// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+   	// +----+-----+-------+------+----------+----------+
+   	// | 1  |  1  | X'00' |  1   | Variable |    2     |
+   	// +----+-----+-------+------+----------+----------+
+   	// VER 版本号，socks5的值为0x05
+   	// CMD 0x01表示CONNECT请求
+   	// RSV 保留字段，值为0x00
+   	// ATYP 目标地址类型，DST.ADDR的数据对应这个字段的类型。
+   	//   0x01表示IPv4地址，DST.ADDR为4个字节
+   	//   0x03表示域名，DST.ADDR是一个可变长度的域名
+   	// DST.ADDR 一个可变长度的值
+   	// DST.PORT 目标端口，固定2个字节
+   
+   	buf := make([]byte, 4)            //四个字节的缓冲区
+   	_, err = io.ReadFull(reader, buf) //先填充满buf,内容包括VER、CMD、RSV、ATYP
+   	if err != nil {
+   		return fmt.Errorf("read header failed:%w", err)
+   	}
+   	ver, cmd, atyp := buf[0], buf[1], buf[3]
+   	//对VER、CMD、ATYP进行错误处理
+   	if ver != socks5Ver {
+   		return fmt.Errorf("not supported ver:%v", ver)
+   	}
+   	if cmd != cmdBind {
+   		return fmt.Errorf("not supported cmd:%v", ver)
+   	}
+   	addr := ""
+   	switch atyp {
+   	//根据ip地址的不同类型进行相应的处理
+   	case atypIPV4:
+   		_, err = io.ReadFull(reader, buf)
+   		if err != nil {
+   			return fmt.Errorf("read atyp failed:%w", err)
+   		}
+   		addr = fmt.Sprintf("%d.%d.%d.%d", buf[0], buf[1], buf[2], buf[3])
+   	case atypeHOST:
+   		hostSize, err := reader.ReadByte()
+   		if err != nil {
+   			return fmt.Errorf("read hostSize failed:%w", err)
+   		}
+   		host := make([]byte, hostSize)
+   		_, err = io.ReadFull(reader, host)
+   		if err != nil {
+   			return fmt.Errorf("read host failed:%w", err)
+   		}
+   		addr = string(host)
+   	case atypeIPV6:
+   		return errors.New("IPv6: no supported yet")
+   	default:
+   		return errors.New("invalid atyp")
+   	}
+   	//读取端口号保存在buf中
+   	_, err = io.ReadFull(reader, buf[:2])
+   	if err != nil {
+   		return fmt.Errorf("read port failed:%w", err)
+   	}
+   	port := binary.BigEndian.Uint16(buf[:2])
+   
+   	log.Println("dial", addr, port)
+   
+   	// +----+-----+-------+------+----------+----------+
+   	// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+   	// +----+-----+-------+------+----------+----------+
+   	// | 1  |  1  | X'00' |  1   | Variable |    2     |
+   	// +----+-----+-------+------+----------+----------+
+   	// VER socks版本，这里为0x05
+   	// REP Relay field,内容取值如下 X’00’ succeeded
+   	// RSV 保留字段
+   	// ATYPE 地址类型
+   	// BND.ADDR 服务绑定的地址
+   	// BND.PORT 服务绑定的端口DST.PORT
+   	//服务器返回响应
+   	_, err = conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+   	if err != nil {
+   		return fmt.Errorf("write failed: %w", err)
+   	}
+   	return nil
+   }
+   ```
+
+4. **relay阶段**：在请求阶段的代码中，添加服务器对客户端请求的数据的响应结果：
+
+   ```go
+   func connect(reader *bufio.Reader, conn net.Conn) (err error) {
+       
+   	...	//请求阶段代码
+       
+   	ctx, cancel := context.WithCancel(context.Background())
+   	defer cancel()
+   
+   	go func() {
+   		_, _ = io.Copy(dest, reader)
+   		cancel()
+   	}()
+   	go func() {
+   		_, _ = io.Copy(conn, dest)
+   		cancel()
+   	}()
+   
+   	<-ctx.Done()
+   	return nil
+   }
+   ```
+
+   
